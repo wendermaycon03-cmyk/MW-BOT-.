@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MW ANÁLISE BOT</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#080b09;color:#f4f7f4;font-family:Arial,sans-serif}
+header{padding:22px;background:#101812;border-bottom:1px solid #24452d}
+header h1{margin:0;color:#58ed79;font-size:25px}
+header p{color:#aab8ad;margin-bottom:0}
+main{max-width:850px;margin:25px auto;padding:15px}
+.card{background:#111a14;border:1px solid #284331;border-radius:16px;padding:20px;margin-bottom:18px}
+h2{font-size:19px;margin-top:0}
+label{display:block;color:#b8c8bb;margin:13px 0 7px}
+input,textarea{width:100%;padding:13px;border-radius:9px;border:1px solid #36533d;background:#080e0a;color:white;font-size:15px}
+textarea{min-height:110px;resize:vertical}
+button{border:0;border-radius:9px;padding:13px 16px;font-weight:bold;cursor:pointer;margin:5px 3px 5px 0}
+.primary{background:#48e875;color:#071109}
+.secondary{background:#263a2b;color:white}
+.whatsapp{background:#20c86a;color:#06140b}
+.danger{background:#542323;color:white}
+.item{padding:15px;background:#0a100c;border:1px solid #29432f;border-radius:12px;margin-top:12px}
+.item img{display:block;max-width:100%;max-height:230px;object-fit:contain;border-radius:9px;margin-top:10px}
+.small{font-size:13px;color:#a9b7ab}
+.status{color:#5cef7b;font-weight:bold}
+#preview{max-width:100%;max-height:200px;display:none;margin-top:12px;border-radius:10px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MW ANÁLISE BOT</h1>
+  <p>Organizador de mensagens, imagens e horários</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>📢 Criar publicação</h2>
+
+    <label>Título</label>
+    <input id="title" placeholder="Ex.: Aviso MW ANÁLISE">
+
+    <label>Mensagem</label>
+    <textarea id="message" placeholder="Digite sua mensagem..."></textarea>
+
+    <label>Data e horário</label>
+    <input id="schedule" type="datetime-local">
+
+    <label>Imagem da publicação</label>
+    <input id="photo" type="file" accept="image/*">
+    <img id="preview" alt="Prévia da imagem">
+
+    <button class="primary" onclick="savePost()">SALVAR PUBLICAÇÃO</button>
+    <p class="small">A página precisa ficar aberta para verificar os horários e mostrar os avisos.</p>
+  </section>
+
+  <section class="card">
+    <h2>📅 Publicações programadas</h2>
+    <div id="posts"><p class="small">Carregando publicações...</p></div>
+  </section>
+
+  <section class="card">
+    <h2>🟢 Grupo MW ANÁLISE</h2>
+    <p class="small">O botão abre seu grupo. Você confirma o envio da mensagem e anexa a imagem no WhatsApp.</p>
+    <button class="whatsapp" onclick="openGroup()">ABRIR GRUPO NO WHATSAPP</button>
+    <button class="secondary" onclick="enableNotifications()">ATIVAR AVISOS</button>
+    <p id="notificationStatus" class="small"></p>
+  </section>
+</main>
+
+<script>
+const GROUP = "https://chat.whatsapp.com/K2cVgo2mIpW7vX4qSvTjqn?s=sh&p=a&iam=2";
+const DB_NAME = "MW_ANALISE_BOT_DB";
+let db;
+let selectedImage = null;
+let posts = [];
+
+const request = indexedDB.open(DB_NAME, 1);
+
+request.onupgradeneeded = event => {
+  const database = event.target.result;
+  if (!database.objectStoreNames.contains("posts")) {
+    database.createObjectStore("posts", {keyPath:"id"});
+  }
+};
+
+request.onsuccess = event => {
+  db = event.target.result;
+  loadPosts();
+};
+
+request.onerror = () => {
+  document.getElementById("posts").innerHTML =
+    "Não foi possível abrir o armazenamento neste navegador.";
+};
+
+document.getElementById("photo").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file) {
+    selectedImage = null;
+    return;
+  }
+
+  if (!file.type.startsWith("image/")) {
+    alert("Escolha um arquivo de imagem.");
+    return;
+  }
+
+  try {
+    selectedImage = await compressImage(file);
+    const preview = document.getElementById("preview");
+    preview.src = URL.createObjectURL(selectedImage);
+    preview.style.display = "block";
+  } catch {
+    alert("Não foi possível carregar essa imagem.");
+  }
+});
+
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      const max = 1200;
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      canvas.toBlob(blob => {
+        URL.revokeObjectURL(url);
+        if (blob) resolve(blob);
+        else reject(new Error("Falha ao comprimir"));
+      }, "image/jpeg", 0.75);
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Imagem inválida"));
+    };
+
+    img.src = url;
+  });
+}
+
+function savePost() {
+  if (!db) return alert("Aguarde o carregamento do sistema.");
+  const title = document.getElementById("title").value.trim();
+  const message = document.getElementById("message").value.trim();
+  const schedule = document.getElementById("schedule").value;
+
+  if (!title || !message || !schedule) {
+    return alert("Preencha o título, a mensagem e o horário.");
+  }
+
+  const date = new Date(schedule);
+  if (Number.isNaN(date.getTime())) return alert("Data inválida.");
+
+  const post = {
+    id: Date.now(),
+    title,
+    message,
+    schedule: date.toISOString(),
+    image: selectedImage || null,
+    notified: false
+  };
+
+  const tx = db.transaction("posts", "readwrite");
+  tx.objectStore("posts").put(post);
+
+  tx.oncomplete = () => {
+    document.getElementById("title").value = "";
+    document.getElementById("message").value = "";
+    document.getElementById("schedule").value = "";
+    document.getElementById("photo").value = "";
+    document.getElementById("preview").style.display = "none";
+    selectedImage = null;
+    loadPosts();
+    alert("Publicação salva!");
+  };
+
+  tx.onerror = () => alert("Erro ao salvar. Tente novamente.");
+}
+
+function loadPosts() {
+  if (!db) return;
+  const tx = db.transaction("posts", "readonly");
+  const req = tx.objectStore("posts").getAll();
+
+  req.onsuccess = () => {
+    posts = req.result.sort((a,b) =>
+      new Date(a.schedule) - new Date(b.schedule)
+    );
+    renderPosts();
+  };
+}
+
+function renderPosts() {
+  const area = document.getElementById("posts");
+  if (!posts.length) {
+    area.innerHTML = '<p class="small">Nenhuma publicação cadastrada.</p>';
+    return;
+  }
+
+  area.innerHTML = posts.map(post => `
+    <div class="item">
+      <strong>${escapeHTML(post.title)}</strong>
+      <p class="small">${new Date(post.schedule).toLocaleString("pt-BR")}</p>
+      <p>${escapeHTML(post.message)}</p>
+      ${post.image ? '<p class="status">Imagem anexada</p>' : '<p class="small">Sem imagem</p>'}
+      <button class="primary" onclick="preparePost(${post.id})">PREPARAR ENVIO</button>
+      <button class="danger" onclick="deletePost(${post.id})">EXCLUIR</button>
+    </div>
+  `).join("");
+}
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, char => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  })[char]);
+}
+
+async function preparePost(id) {
+  const post = posts.find(item => item.id === id);
+  if (!post) return;
+
+  try {
+    await navigator.clipboard.writeText(post.message);
+  } catch {
+    alert("Não consegui copiar automaticamente. Copie o texto exibido na próxima tela.");
+  }
+
+  if (post.image) {
+    const url = URL.createObjectURL(post.image);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "MW-ANALISE-IMAGEM.jpg";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
+  alert("Texto copiado e imagem preparada. No WhatsApp, anexe a imagem e confirme o envio.");
+  window.open(GROUP, "_blank");
+}
+
+function deletePost(id) {
+  if (!confirm("Deseja excluir esta publicação?")) return;
+  const tx = db.transaction("posts", "readwrite");
+  tx.objectStore("posts").delete(id);
+  tx.oncomplete = loadPosts;
+}
+
+function openGroup() {
+  window.open(GROUP, "_blank");
+}
+
+async function enableNotifications() {
+  if (!("Notification" in window)) {
+    return alert("Este navegador não oferece notificações.");
+  }
+
+  const permission = await Notification.requestPermission();
+  document.getElementById("notificationStatus").textContent =
+    permission === "granted" ? "Avisos ativados neste navegador." :
+    "Permissão de notificações não concedida.";
+}
+
+function checkSchedules() {
+  if (!db || !("Notification" in window) || Notification.permission !== "granted") return;
+
+  const now = Date.now();
+  posts.forEach(post => {
+    if (!post.notified && new Date(post.schedule).getTime() <= now) {
+      new Notification("MW ANÁLISE — horário da publicação", {
+        body: post.title + " está programada para agora."
+      });
+
+      const tx = db.transaction("posts", "readwrite");
+      post.notified = true;
+      tx.objectStore("posts").put(post);
+    }
+  });
+}
+
+setInterval(checkSchedules, 15000);
+</script>
+</body>
+</html>
